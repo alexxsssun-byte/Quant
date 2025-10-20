@@ -1,99 +1,63 @@
 #!/usr/bin/env python3
 """
-Stock Return Prediction Model
+Streamlit App for Stock Return Prediction Model
 Author: Your Name
 GitHub: https://github.com/yourusername/quant-stock-model
-Description:
-  A quantitative model to predict next-day stock returns using
-  linear regression on historical financial data.
 """
 
-import argparse
+import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score, mean_squared_error
+import matplotlib.pyplot as plt
+from stock_return_model import load_data, prepare_features, split_data, train_and_evaluate
 
-# Optional: use real stock data if yfinance is available
-try:
-    import yfinance as yf
-    REAL_DATA = True
-except ImportError:
-    REAL_DATA = False
+st.set_page_config(page_title="Quant Stock Return Model", page_icon="📈", layout="centered")
 
+# --- Sidebar ---
+st.sidebar.title("⚙️ Model Settings")
+ticker = st.sidebar.text_input("Stock Ticker", "AAPL")
+start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2015-01-01"))
+end_date = st.sidebar.date_input("End Date", pd.to_datetime("2025-01-01"))
+st.sidebar.markdown("---")
+run_button = st.sidebar.button("Run Model 🚀")
 
-def load_data(ticker="AAPL", start="2015-01-01", end="2025-01-01"):
-    """Load real or simulated stock data."""
-    if REAL_DATA:
-        print(f"📥 Downloading {ticker} data from Yahoo Finance...")
-        data = yf.download(ticker, start=start, end=end)
-    else:
-        print("⚙️ Simulating synthetic stock data (no yfinance installed).")
-        np.random.seed(42)
-        dates = pd.date_range(start=start, end=end, freq="B")
-        price = 150 + np.cumsum(np.random.normal(0, 1, len(dates)))
-        data = pd.DataFrame({"Date": dates, "Close": price}).set_index("Date")
-    return data
+# --- Title ---
+st.title("📊 Quantitative Stock Return Prediction")
+st.markdown("Predict next-day stock returns using a simple **linear regression model** based on historical data.")
 
+# --- Run Model ---
+if run_button:
+    with st.spinner("Building model... please wait"):
+        data = load_data(ticker, start=start_date, end=end_date)
+        data = prepare_features(data)
+        X_train, X_test, y_train, y_test = split_data(data)
+        r2, mse, results = train_and_evaluate(X_train, y_train, X_test, y_test)
 
-def prepare_features(data):
-    """Generate lag, moving average, and volatility features."""
-    data['Return'] = np.log(data['Close'] / data['Close'].shift(1))
-    data['Lag1'] = data['Return'].shift(1)
-    data['Lag2'] = data['Return'].shift(2)
-    data['MA5'] = data['Close'].rolling(5).mean() / data['Close'] - 1
-    data['Vol10'] = data['Return'].rolling(10).std()
-    data = data.dropna()
-    return data
+        st.success("✅ Model completed successfully!")
 
+        # --- Metrics ---
+        st.subheader("📈 Model Performance")
+        st.metric(label="R² Score", value=f"{r2:.4f}")
+        st.metric(label="Mean Squared Error", value=f"{mse:.6f}")
 
-def split_data(data):
-    """Train-test split."""
-    train = data.loc[:'2023-12-31']
-    test = data.loc['2024-01-01':]
+        # --- Plot actual vs predicted ---
+        st.subheader("🔍 Predicted vs Actual Returns")
+        plt.figure(figsize=(8, 4))
+        plt.plot(results["Actual"].values, label="Actual", alpha=0.7)
+        plt.plot(results["Predicted"].values, label="Predicted", alpha=0.7)
+        plt.legend()
+        plt.title(f"{ticker} Return Prediction")
+        plt.xlabel("Test Period")
+        plt.ylabel("Return")
+        st.pyplot(plt)
 
-    X_train = train[['Lag1', 'Lag2', 'MA5', 'Vol10']]
-    y_train = train['Return'].shift(-1).dropna()
-    X_train = X_train.iloc[:-1, :]
+        # --- Show table ---
+        st.subheader("🧮 Sample Predictions")
+        st.dataframe(results.head(10))
 
-    X_test = test[['Lag1', 'Lag2', 'MA5', 'Vol10']]
-    y_test = test['Return'].shift(-1).dropna()
-    X_test = X_test.iloc[:-1, :]
+        # --- Download results ---
+        csv = results.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download Predictions CSV", data=csv, file_name=f"{ticker}_predictions.csv")
 
-    return X_train, X_test, y_train, y_test
-
-
-def train_and_evaluate(X_train, y_train, X_test, y_test):
-    """Train model and evaluate performance."""
-    model = LinearRegression()
-    model.fit(X_train, y_train)
-    preds = model.predict(X_test)
-    r2 = r2_score(y_test, preds)
-    mse = mean_squared_error(y_test, preds)
-    results = pd.DataFrame({"Actual": y_test, "Predicted": preds}).reset_index(drop=True)
-    return r2, mse, results
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Quantitative Stock Return Model")
-    parser.add_argument("--ticker", type=str, default="AAPL", help="Stock ticker symbol")
-    args = parser.parse_args()
-
-    print("\n🚀 Building stock return prediction model...\n")
-    data = load_data(args.ticker)
-    data = prepare_features(data)
-    X_train, X_test, y_train, y_test = split_data(data)
-    r2, mse, results = train_and_evaluate(X_train, y_train, X_test, y_test)
-
-    print("\n📊 MODEL PERFORMANCE")
-    print(f"R² Score: {r2:.4f}")
-    print(f"MSE: {mse:.6f}")
-    print("\nSample predictions:")
-    print(results.head())
-
-    results.to_csv("model_predictions.csv", index=False)
-    print("\n✅ Results saved to 'model_predictions.csv'")
-
-
-if __name__ == "__main__":
-    main()
+else:
+    st.info("👈 Set your parameters on the left and click **Run Model 🚀** to begin.")
