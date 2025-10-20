@@ -1,0 +1,42 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+.env
+.venv/
+venv/
+env/
+
+# --- Jupyter / Notebooks ---
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# --- Streamlit cache ---
+.streamlit/
+.cache/
+*/__pycache__/
+
+# --- Data and results ---
+data/
+*.csv
+*.xlsx
+*.parquet
+*.h5
+*.zip
+*.pkl
+*.json
+*.feather
+
+# --- OS / IDE files ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+
+# --- Build artifacts ---
+dist/
+build/
