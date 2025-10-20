@@ -1,30 +1,27 @@
-# Quantitative Stock Return Prediction Model
+# 📈 Quantitative Stock Return Model (Streamlit App)
 
-A simple **quantitative finance project** that predicts next-day stock returns using linear regression on historical data.  
-Perfect for students, finance enthusiasts, or anyone learning quant research.
+An interactive web dashboard to predict next-day stock returns using linear regression and historical data.  
+Built with **Python**, **scikit-learn**, and **Streamlit**.
 
 ---
 
-## 📈 Features
-- Downloads stock data from Yahoo Finance (via `yfinance`)
-- Generates lag, volatility, and moving average features
+## 🚀 Live Demo
+You can deploy this app directly on [Streamlit Cloud](https://streamlit.io/cloud) or run it locally.
+
+---
+
+## 🧠 Features
+- Downloads real stock data via Yahoo Finance (`yfinance`)
+- Generates lag and volatility features
 - Trains a linear regression model
-- Evaluates accuracy (R², MSE)
-- Exports predictions to `model_predictions.csv`
+- Displays R², MSE, and prediction charts
+- Downloadable results as CSV
 
 ---
 
-## 🧠 How It Works
-1. Pull historical price data.
-2. Create lag features and technical indicators.
-3. Train a model to predict next-day returns.
-4. Evaluate and export results.
-
----
-
-## 🧰 Installation
+## ⚙️ Installation
 
 ```bash
-git clone https://github.com/alexxsssun-byte/quant
+git clone https://github.com/yourusername/quant-stock-model.git
 cd quant-stock-model
 pip install -r requirements.txt
