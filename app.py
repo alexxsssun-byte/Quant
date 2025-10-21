@@ -271,10 +271,17 @@ if run_button:
         st.write(f"**R² Score:** {r2:.4f}")
         st.write(f"**Mean Squared Error:** {mse:.6f}")
 
-        # Align test data
+       # --- Align predictions with test data safely ---
         test_df = test_data.copy()
-        test_df["Predicted_Return"] = preds
-        test_df["Actual_Return"] = y_test.values
+
+        # Ensure both have matching lengths
+        min_len = min(len(preds), len(test_df))
+        test_df = test_df.iloc[-min_len:].copy()
+        y_test_aligned = y_test.iloc[-min_len:].copy()
+
+        test_df["Predicted_Return"] = preds[-min_len:]
+        test_df["Actual_Return"] = y_test_aligned.values
+
 
         # --- Toggle between return and price view ---
         st.subheader("🔍 Predicted vs Actual Visualization")
@@ -402,16 +409,45 @@ if st.button("Run Forecast"):
 
         with st.spinner("Forecasting future prices..."):
             future_df = forecast_future_prices(model, data, days_ahead)
+
+            # --- Safeguard ---
+            if future_df is None or future_df.empty:
+                st.error("⚠️ Forecast failed or returned no data. Try adjusting your date range or model.")
+                st.stop()
+
             st.success(f"✅ Forecasted {days_ahead} days ahead.")
+
+            # --- Prepare historical and forecast data ---
             last_known = data.reset_index().iloc[-50:][["Date", "Close"]]
-            merged = pd.concat([
-                last_known.rename(columns={"Close": "PredictedPrice"}),
-                future_df
-            ])
-            st.line_chart(merged.set_index("Date"))
+            last_known = last_known.rename(columns={"Close": "ActualPrice"})
+
+            # --- Convert and validate forecast dates ---
+            if "Date" not in future_df.columns:
+                st.error("⚠️ Forecast output is missing the 'Date' column.")
+                st.stop()
+
+            future_df["Date"] = pd.to_datetime(future_df["Date"], errors="coerce")
+            future_df = future_df.dropna(subset=["Date"])
+            future_df = future_df[future_df["Date"] > last_known["Date"].max()]
+
+            if future_df.empty:
+                st.warning("⚠️ No future dates found beyond last known data.")
+                st.stop()
+
+            # --- Combine both datasets for plotting ---
+            chart_df = pd.concat([last_known, future_df], ignore_index=True)
+
+            # --- Plot combined chart ---
+            st.line_chart(
+                chart_df.set_index("Date")[["ActualPrice", "PredictedPrice"]],
+                height=400,
+            )
+
+            # --- Display forecast table ---
             st.dataframe(future_df)
     else:
         st.warning("⚠️ Please run the model first before forecasting.")
+
 
 # --- Download results safely ---
 if "results" in st.session_state:

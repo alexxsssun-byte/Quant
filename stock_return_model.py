@@ -367,7 +367,8 @@ def train_and_evaluate(model, X_train, X_test, y_train, y_test):
 # ------------------ FORECAST FUTURE PRICES ------------------
 def forecast_future_prices(model, data, days_ahead=5):
     """
-    Forecast future stock prices using the trained model and last available features.
+    Forecast future stock or crypto prices using the trained model and last available features.
+    Handles missing columns gracefully and ensures continuous forecast dates.
     """
     import pandas as pd
     import numpy as np
@@ -375,28 +376,34 @@ def forecast_future_prices(model, data, days_ahead=5):
     features = ["Lag1", "Lag2", "Lag3", "MA5", "Vol10"]
     df = data.copy()
 
-    # Flatten MultiIndex if necessary
+    # --- Flatten MultiIndex if necessary ---
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
 
-    # Check for missing features
-    missing = [f for f in features if f not in df.columns]
-    if missing:
-        raise KeyError(f"Missing required feature columns: {missing}\nAvailable columns: {list(df.columns)}")
+    # --- Handle missing features dynamically ---
+    available_features = [f for f in features if f in df.columns]
+    if len(available_features) < 3:
+        print("⚠️ Too few available features for forecasting.")
+        return pd.DataFrame()
 
-    df = df.dropna(subset=features).tail(50)
+    df = df.dropna(subset=available_features).tail(50)
     if len(df) < 10:
-        print("DEBUG: Raw data head →", data.head() if data is not None else "None")
-        raise ValueError("Not enough valid data to forecast. Try a longer date range.")
+        print("⚠️ Not enough valid data for forecasting. Try a longer date range.")
+        return pd.DataFrame()
 
     last_close = df["Close"].iloc[-1]
     forecasts = []
 
     for _ in range(days_ahead):
-        feature_row = df[features].iloc[-1:]
+        feature_row = df[available_features].iloc[-1:]
         predicted_return = model.predict(feature_row)[0]
         next_price = last_close * np.exp(predicted_return)
-        next_date = df.index[-1] + pd.tseries.offsets.BDay(1)
+
+        # --- Handle datetime safely ---
+        last_date = df.index[-1]
+        if not isinstance(last_date, pd.Timestamp):
+            last_date = pd.Timestamp.today().normalize()
+        next_date = last_date + pd.Timedelta(days=1)
 
         forecasts.append({
             "Date": next_date,
@@ -404,17 +411,23 @@ def forecast_future_prices(model, data, days_ahead=5):
             "PredictedReturn": predicted_return
         })
 
+        # --- Append new synthetic data point ---
         new_row = pd.DataFrame({
             "Close": [next_price],
             "Return": [predicted_return],
             "Lag1": [df["Return"].iloc[-1]],
-            "Lag2": [df["Lag1"].iloc[-1]],
-            "Lag3": [df["Lag2"].iloc[-1]],
+            "Lag2": [df["Lag1"].iloc[-1]] if "Lag1" in df else [0],
+            "Lag3": [df["Lag2"].iloc[-1]] if "Lag2" in df else [0],
             "MA5": [df["Close"].rolling(5).mean().iloc[-1] / df["Close"].iloc[-1] - 1],
-            "Vol10": [df["Return"].rolling(10).std().iloc[-1]],
+            "Vol10": [df["Return"].rolling(10).std().iloc[-1]] if "Return" in df else [0],
         }, index=[next_date])
 
         df = pd.concat([df, new_row])
         last_close = next_price
 
+    print(f"✅ Forecast generated: {len(forecasts)} days")
+    if len(forecasts) > 0:
+        print("Preview →", forecasts[-1])
+
+    # --- Final return ---
     return pd.DataFrame(forecasts)
