@@ -28,6 +28,13 @@ from stock_return_model import (
     _fetch_market_context,
 )
 
+# === Directional Classification Model Imports ===
+from stock_return_model import (
+    build_model as build_directional_model,
+    train_and_predict as run_directional_model,
+    evaluate as evaluate_directional_model,
+)
+
 from sklearn.ensemble import RandomForestRegressor, VotingRegressor
 from sklearn.linear_model import LinearRegression, RidgeCV
 from sklearn.model_selection import KFold, RandomizedSearchCV, cross_val_score, cross_val_predict, TimeSeriesSplit
@@ -180,6 +187,14 @@ include_extra = st.sidebar.toggle(
 mode = st.sidebar.radio("Dashboard Mode", ["Full Analysis", "Quick Dashboard"], horizontal=True)
 
 run_button = st.sidebar.button("🚀 Run Model")
+
+# --- Model type toggle ---
+model_mode = st.sidebar.radio(
+    "Select Model Type",
+    ["Regression Forecast", "Directional Trading Model"],
+    index=0,
+    horizontal=False,
+)
 
 if st.sidebar.button("🔁 Force Retrain"):
     for key in ["model", "data", "results", "preds", "y_test", "test_data"]:
@@ -337,6 +352,7 @@ try:
     msg_box.empty()
     st.success(f"✅ Data ready: {len(data):,} samples, {X_train.shape[1]} features.")
 
+
     st.session_state.update({
         "data": data,
         "X_train": X_train,
@@ -349,6 +365,164 @@ try:
 except Exception as e:
     msg_box.empty()
     st.error(f"❌ Data preparation failed: {e}")
+    st.stop()
+
+# ============================================================
+# 🧠 Directional vs Regression Branch
+# ============================================================
+if model_mode == "Directional Trading Model":
+    st.markdown("## 🧠 Directional Trading Model Results")
+    from stock_return_model import prepare_features
+
+    try:
+        df_features = prepare_features(data, include_extra=False, ticker=ticker)
+        model = build_directional_model()
+        result_df = run_directional_model(df_features, model)
+        metrics = evaluate_directional_model(result_df)
+
+        # --- Display key metrics ---
+        cols = st.columns(3)
+        cols[0].metric("Sharpe Ratio", f"{metrics['Sharpe']:.2f}")
+        cols[1].metric("Hit Rate", f"{metrics['HitRate']:.2%}")
+        cols[2].metric("Max Drawdown", f"{metrics['Drawdown']:.2f}%")
+
+        # ============================================================
+        # 💹 Price Chart with Buy/Sell Signals
+        # ============================================================
+        st.markdown("### 💹 Algo Buy/Sell Signal Chart")
+
+        # Ensure index is datetime
+        result_df = result_df.copy()
+        if not isinstance(result_df.index, pd.DatetimeIndex):
+            if "Date" in result_df.columns:
+                result_df["Date"] = pd.to_datetime(result_df["Date"])
+                result_df = result_df.set_index("Date")
+
+        # Extract buy/sell points
+        buy_signals = result_df[result_df["signal"] == 1]
+        sell_signals = result_df[result_df["signal"] == -1]
+
+        # Create price chart with markers
+        fig_signal = go.Figure()
+
+        # Base price line
+        fig_signal.add_trace(go.Scatter(
+            x=result_df.index,
+            y=result_df["Close"],
+            mode="lines",
+            name="Close Price",
+            line=dict(color="#1e5631", width=2)
+        ))
+
+        # Buy markers
+        fig_signal.add_trace(go.Scatter(
+            x=buy_signals.index,
+            y=buy_signals["Close"],
+            mode="markers",
+            name="Buy Signal",
+            marker=dict(symbol="triangle-up", color="limegreen", size=10),
+            hovertemplate="Buy: %{x|%Y-%m-%d}<br>Price: %{y:.2f}<extra></extra>"
+        ))
+
+        # Sell markers
+        fig_signal.add_trace(go.Scatter(
+            x=sell_signals.index,
+            y=sell_signals["Close"],
+            mode="markers",
+            name="Sell Signal",
+            marker=dict(symbol="triangle-down", color="red", size=10),
+            hovertemplate="Sell: %{x|%Y-%m-%d}<br>Price: %{y:.2f}<extra></extra>"
+        ))
+
+        fig_signal.update_layout(
+            title="Directional Model — Buy/Sell Signals on Price",
+            xaxis_title="Date",
+            yaxis_title="Price",
+            template="plotly_dark",
+            height=500,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+
+        st.plotly_chart(fig_signal, use_container_width=True)
+
+        # ============================================================
+        # 📈 Strategy Equity Curve (Bonus)
+        # ============================================================
+        st.markdown("### 📈 Strategy Equity Curve")
+
+        eq_curve = (1 + result_df["strategy_return"]).cumprod()
+        bench_curve = (1 + result_df["Return"]).cumprod()
+
+        fig_eq = go.Figure()
+        fig_eq.add_trace(go.Scatter(
+            x=result_df.index,
+            y=bench_curve,
+            name="Benchmark (Buy & Hold)",
+            line=dict(color="#7f8c8d", width=2)
+        ))
+        fig_eq.add_trace(go.Scatter(
+            x=result_df.index,
+            y=eq_curve,
+            name="Strategy Equity",
+            line=dict(color="#2e8b57", width=2)
+        ))
+        fig_eq.update_layout(
+            title="Model Strategy vs Benchmark",
+            yaxis_title="Cumulative Return",
+            template="plotly_dark",
+            height=400,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+
+        st.plotly_chart(fig_eq, use_container_width=True)
+        # ============================================================
+        # 💵 Equity Curve with Trade Markers
+        # ============================================================
+        st.markdown("### 💵 Equity Curve with Trade Markers")
+
+        fig_eq_signals = go.Figure()
+
+        # Equity curve
+        fig_eq_signals.add_trace(go.Scatter(
+            x=result_df.index,
+            y=eq_curve,
+            mode="lines",
+            name="Strategy Equity",
+            line=dict(color="#2e8b57", width=2)
+        ))
+
+        # Buy markers on equity curve
+        fig_eq_signals.add_trace(go.Scatter(
+            x=buy_signals.index,
+            y=eq_curve.loc[buy_signals.index],
+            mode="markers",
+            name="Buy Signal",
+            marker=dict(symbol="triangle-up", color="limegreen", size=10)
+        ))
+
+        # Sell markers on equity curve
+        fig_eq_signals.add_trace(go.Scatter(
+            x=sell_signals.index,
+            y=eq_curve.loc[sell_signals.index],
+            mode="markers",
+            name="Sell Signal",
+            marker=dict(symbol="triangle-down", color="red", size=10)
+        ))
+
+        fig_eq_signals.update_layout(
+            title="Equity Curve with Buy/Sell Trade Points",
+            xaxis_title="Date",
+            yaxis_title="Cumulative Return",
+            template="plotly_dark",
+            height=450,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+
+        st.plotly_chart(fig_eq_signals, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"⚠️ Directional model failed: {e}")
+
     st.stop()
 
 # ============================================================

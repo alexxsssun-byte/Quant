@@ -10,6 +10,12 @@ from sklearn.metrics import r2_score, mean_squared_error
 from datetime import datetime
 import warnings
 warnings.filterwarnings("ignore")
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import VotingClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
 
 # Optional libraries (loaded only if used)
 from fmp_python.fmp import FMP
@@ -406,6 +412,122 @@ def split_data(data, train_ratio=0.8, horizon=5):
     # --- Return scaled features + dataframes ---
     return X_train_scaled, X_test_scaled, y_train, y_test, test_data
 
+# ============================================================
+# 🧭 CLASSIFICATION-BASED DIRECTIONAL MODEL (Hybrid Ensemble)
+# ============================================================
+
+def prepare_target(df):
+    """
+    Replace noisy regression target with direction (up/down).
+    Volatility-adjusted return improves stability.
+    """
+    df = df.copy()
+    if "Return" not in df.columns:
+        df["Return"] = np.log(df["Close"] / df["Close"].shift(1))
+    if "Vol20" not in df.columns:
+        df["Vol20"] = df["Return"].rolling(20).std().shift(1)
+    df["AdjReturn"] = df["Return"] / (df["Vol20"] + 1e-6)
+    df["Target"] = (df["AdjReturn"].shift(-1) > 0).astype(int)
+    return df.dropna()
+
+
+def build_model():
+    """
+    Builds a hybrid ensemble classifier for directional prediction.
+    """
+    xgb = XGBClassifier(
+        n_estimators=300, learning_rate=0.03, max_depth=4,
+        subsample=0.8, colsample_bytree=0.8, random_state=42
+    )
+    lgb = LGBMClassifier(
+        n_estimators=300, learning_rate=0.05, max_depth=-1,
+        subsample=0.8, colsample_bytree=0.8, random_state=42
+    )
+    logi = LogisticRegression(max_iter=1000)
+
+    ensemble = VotingClassifier(
+        estimators=[("xgb", xgb), ("lgb", lgb), ("logi", logi)],
+        voting="soft"
+    )
+    return ensemble
+
+
+def add_regime_filters(df):
+    """
+    Adds filters for trend and volatility regime to reduce drawdowns.
+    """
+    if "MA10" not in df.columns or "MA50" not in df.columns:
+        df["MA10"] = df["Close"].rolling(10).mean().shift(1)
+        df["MA50"] = df["Close"].rolling(50).mean().shift(1)
+    df["trend_flag"] = (df["MA10"] > df["MA50"]).astype(int)
+    df["Vol10"] = df["Return"].rolling(10).std().shift(1)
+    df["Vol20"] = df["Return"].rolling(20).std().shift(1)
+    df["vol_ratio"] = df["Vol10"] / (df["Vol20"] + 1e-6)
+    df["regime_ok"] = (df["trend_flag"] == 1) & (df["vol_ratio"] < 1.5)
+    return df
+
+
+def train_and_predict(df, model):
+    """
+    Trains the directional classifier and generates trading signals.
+    """
+    features = [
+        "Lag1", "Lag2", "Lag3", "MA5", "MA10", "Vol10", "Vol20",
+        "RSI14", "MACD", "BollWidth", "VolumeChange"
+    ]
+
+    df = prepare_target(df)
+    df = add_regime_filters(df)
+    df = df.dropna(subset=features)
+
+    X = df[features]
+    y = df["Target"]
+
+    model.fit(X, y)
+
+    # Predict probability of next-day up move
+    df["pred_prob"] = model.predict_proba(X)[:, 1]
+    df["signal"] = np.where(df["pred_prob"] > 0.55, 1,
+                     np.where(df["pred_prob"] < 0.45, -1, 0))
+
+    # Scale position by inverse volatility and apply regime filter
+    df["position"] = df["signal"] * (1 / (df["Vol20"] + 1e-6)) * df["regime_ok"]
+    df["strategy_return"] = df["position"].shift(1) * df["Return"]
+
+    return df
+
+
+def evaluate(df):
+    """
+    Basic performance report: Sharpe, Hit Rate, Drawdown.
+    """
+    cum_model = (1 + df["strategy_return"]).cumprod()
+    cum_bench = (1 + df["Return"]).cumprod()
+
+    sharpe = np.sqrt(252) * df["strategy_return"].mean() / df["strategy_return"].std()
+    hit_rate = (np.sign(df["strategy_return"]) == np.sign(df["Return"])).mean()
+    dd_series = (cum_model / cum_model.cummax() - 1)
+    drawdown = dd_series.min() * 100
+    if np.isinf(drawdown) or np.isnan(drawdown):
+        drawdown = 0
+
+
+    print(f"Sharpe: {sharpe:.3f}")
+    print(f"Hit Rate: {hit_rate:.3f}")
+    print(f"Drawdown: {drawdown:.3f}")
+
+    return {"Sharpe": sharpe, "HitRate": hit_rate, "Drawdown": drawdown}
+
+
+if __name__ == "__main__":
+    # Example usage (replace with your own asset loader)
+    ticker = "SPY"
+    data = load_data(ticker, start="2015-01-01", end="2025-01-01")
+    df = prepare_features(data)
+    model = build_model()
+    result_df = train_and_predict(df, model)
+    evaluate(result_df)
+
 # ------------------ BACKTEST ------------------
 def backtest_strategy(test_data, predictions):
     realized_returns = test_data["Return"].values
@@ -518,7 +640,7 @@ def forecast_future_prices(model, data, days_ahead=5):
         # --- Compute next date and price ---
         last_close = df["Close"].iloc[-1]
         last_date = df.index[-1]
-        next_date = last_date + pd.Timedelta(days=1)
+        next_date = df.index[-1] + pd.Timedelta(days=(i + 1))
         next_price = last_close * np.exp(predicted_return)
 
         # --- Save forecast ---
@@ -548,12 +670,6 @@ def forecast_future_prices(model, data, days_ahead=5):
         predicted_return = (0.6 * predicted_return + 0.4 * recent_mean)
         predicted_return *= (1 + np.random.normal(0, 0.5 * recent_std))
 
-
-        # --- Compute next date and price ---
-        last_close = df["Close"].iloc[-1]
-        last_date = df.index[-1]
-        next_date = last_date + pd.Timedelta(days=1)
-        next_price = last_close * np.exp(predicted_return)
 
         forecasts.append({
             "Date": next_date,
